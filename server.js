@@ -676,9 +676,9 @@ function rewriteHTML(html, req) {
   }
 
   // ---- Replace original logo with custom logo ----
-  // Match the logo <img> inside <h1 class="logos"> and replace its src
+  // Match the logo <img> inside <h1 class="logos"> or <span class="logos">
   out = out.replace(
-    /(<h1\s+class="logos">\s*<a[^>]*>\s*<img[^>]*?)\s*src="[^"]*"/gi,
+    /(<(?:h1|span)\s+class="logos">\s*<a[^>]*>\s*<img[^>]*?)\s*src="[^"]*"/gi,
     `$1 src="${CUSTOM_LOGO}"`
   );
   // Also catch any <img> with the original logo filename anywhere
@@ -688,6 +688,15 @@ function rewriteHTML(html, req) {
       `$1src="${CUSTOM_LOGO}"`
     );
   }
+  // Replace JS variables dmlogo1/dmlogo2 that override the logo on theme toggle
+  out = out.replace(
+    /var\s+dmlogo1\s*=\s*'[^']*'/gi,
+    `var dmlogo1 = '${CUSTOM_LOGO}'`
+  );
+  out = out.replace(
+    /var\s+dmlogo2\s*=\s*'[^']*'/gi,
+    `var dmlogo2 = '${CUSTOM_LOGO}'`
+  );
 
   return out;
 }
