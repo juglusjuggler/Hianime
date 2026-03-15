@@ -750,8 +750,14 @@ function generateRobotsTxt(req) {
 }
 
 function rewriteSitemap(xml, req) {
+  const mirrorHost = getMirrorHost(req);
   const mirrorOrigin = getMirrorOrigin(req);
-  return xml.replace(new RegExp(`https?://${escapeRegex(TARGET_HOST)}`, "gi"), mirrorOrigin);
+  let out = xml;
+  // Replace full URLs
+  out = out.replace(new RegExp(`https?://${escapeRegex(TARGET_HOST)}`, "gi"), mirrorOrigin);
+  // Replace protocol-relative URLs (e.g. //hianime.city in XSL href)
+  out = out.replace(new RegExp(`//${escapeRegex(TARGET_HOST)}`, "gi"), `//${mirrorHost}`);
+  return out;
 }
 
 function getContentCategory(contentType) {
