@@ -25,7 +25,7 @@ const MIRROR_HOST = process.env.MIRROR_HOST || "";
 const UPSTREAM_TIMEOUT = parseInt(process.env.UPSTREAM_TIMEOUT) || 15000;
 
 // Custom logo path (served from /public/hianime.png)
-const CUSTOM_LOGO = process.env.CUSTOM_LOGO || "/public/hianime.png";
+const CUSTOM_LOGO = process.env.CUSTOM_LOGO || "https://pub-b809a12aff9f4b918a309f6bdbd29455.r2.dev/hianime.png";
 // Original logo filename pattern to replace
 const ORIGINAL_LOGO_PATTERN = process.env.ORIGINAL_LOGO_PATTERN || "9453036c-bed9-4ac2-987c-d354b4bcaafa";
 
