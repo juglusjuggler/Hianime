@@ -22,7 +22,23 @@ const ORIGIN_IP = process.env.ORIGIN_IP || "5.182.209.112";
 const MIRROR_HOST = process.env.MIRROR_HOST || "";
 
 // Timeout for upstream requests (ms)
-const UPSTREAM_TIMEOUT = parseInt(process.env.UPSTREAM_TIMEOUT) || 15000;
+const UPSTREAM_TIMEOUT = parseInt(process.env.UPSTREAM_TIMEOUT) || 30000;
+
+// HTTPS agents with keepalive for connection reuse
+const directIPAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: UPSTREAM_TIMEOUT,
+});
+const domainAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 50,
+  maxFreeSockets: 10,
+  timeout: UPSTREAM_TIMEOUT,
+});
 
 // Custom logo path (served from /public/hianime.png)
 const CUSTOM_LOGO = process.env.CUSTOM_LOGO || "https://pub-b809a12aff9f4b918a309f6bdbd29455.r2.dev/hianime.png";
@@ -355,6 +371,7 @@ function fetchViaDirectIPRaw(path, headers, method, body) {
       timeout: UPSTREAM_TIMEOUT,
       servername: TARGET_HOST,
       rejectUnauthorized: false,
+      agent: directIPAgent,
     };
 
     const req = https.request(options, (res) => {
@@ -427,49 +444,43 @@ async function fetchViaDirectIP(path, headers, method, body) {
 /**
  * Raw domain fetch — no Imunify handling.
  */
-async function fetchViaDomainRaw(path, headers, method, body) {
-  const url = `${TARGET_ORIGIN}${path}`;
-  const options = {
-    method,
-    headers,
-    redirect: "manual",
-    signal: AbortSignal.timeout(UPSTREAM_TIMEOUT),
-  };
-  if (body && body.length > 0 && !["GET", "HEAD"].includes(method.toUpperCase())) {
-    options.body = body;
-  }
+function fetchViaDomainRaw(path, headers, method, body) {
+  return new Promise((resolve, reject) => {
+    const urlObj = new URL(`${TARGET_ORIGIN}${path}`);
+    const options = {
+      hostname: urlObj.hostname,
+      port: 443,
+      path: urlObj.pathname + urlObj.search,
+      method: method,
+      headers: { ...headers, host: TARGET_HOST },
+      timeout: UPSTREAM_TIMEOUT,
+      agent: domainAgent,
+    };
 
-  const res = await fetch(url, options);
+    const req = https.request(options, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        resolve({
+          status: res.statusCode,
+          headers: res.headers,
+          body: Buffer.concat(chunks),
+          strategy: "cloudflareDomain",
+        });
+      });
+    });
 
-  const chunks = [];
-  if (res.body) {
-    const reader = res.body.getReader();
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      chunks.push(value);
+    req.on("timeout", () => {
+      req.destroy();
+      reject(new Error("Domain request timed out"));
+    });
+    req.on("error", reject);
+
+    if (body && body.length > 0 && !["GET", "HEAD"].includes(method.toUpperCase())) {
+      req.write(body);
     }
-  }
-
-  // Collect all set-cookie headers properly
-  const resHeaders = {};
-  for (const [k, v] of res.headers.entries()) {
-    resHeaders[k] = v;
-  }
-  // fetch() merges set-cookie; get them via getSetCookie if available
-  if (res.headers.getSetCookie) {
-    const setCookies = res.headers.getSetCookie();
-    if (setCookies.length > 0) {
-      resHeaders["set-cookie"] = setCookies;
-    }
-  }
-
-  return {
-    status: res.status,
-    headers: resHeaders,
-    body: Buffer.concat(chunks),
-    strategy: "cloudflareDomain",
-  };
+    req.end();
+  });
 }
 
 /**
@@ -880,7 +891,8 @@ app.all("*", async (req, res) => {
     let bodyBuffer;
     try {
       bodyBuffer = await decompressBody(upstreamRes.body, contentEncoding);
-    } catch {
+    } catch (decompErr) {
+      console.warn(`[decompress] Failed (${contentEncoding}): ${decompErr.message}, using raw body`);
       bodyBuffer = upstreamRes.body;
     }
 
@@ -903,8 +915,82 @@ app.all("*", async (req, res) => {
     res.status(upstreamRes.status);
     res.send(bodyText);
   } catch (err) {
-    console.error("Proxy error:", err.message);
-    res.status(502).send("Bad Gateway");
+    console.error(`Proxy error [${req.method} ${req.originalUrl}]:`, err.message);
+
+    // Retry once with a small delay
+    try {
+      await new Promise(r => setTimeout(r, 1000));
+      console.log(`[retry] Retrying ${req.method} ${req.originalUrl}...`);
+
+      // Reset strategies for retry attempt
+      if (!strategies.directIP.ok && Date.now() - strategies.directIP.lastFail > 10000) {
+        strategies.directIP.ok = true;
+        strategies.directIP.fails = 0;
+      }
+      if (!strategies.cloudflareDomain.ok && Date.now() - strategies.cloudflareDomain.lastFail > 10000) {
+        strategies.cloudflareDomain.ok = true;
+        strategies.cloudflareDomain.fails = 0;
+      }
+
+      const retryHeaders = buildUpstreamHeaders(req);
+      const retryRes = await fetchFromOrigin(req.originalUrl, retryHeaders, req.method, reqBody || null);
+
+      // Copy response headers (same logic)
+      const retryResHeaders = retryRes.headers;
+      for (const [key, value] of Object.entries(retryResHeaders)) {
+        const lk = key.toLowerCase();
+        if (STRIP_RESPONSE_HEADERS.has(lk)) continue;
+        if (lk === "content-encoding" || lk === "content-length" || lk === "transfer-encoding") continue;
+        if (lk === "location") {
+          const newLocation = value
+            .replace(new RegExp(`https?://${escapeRegex(TARGET_HOST)}`, "gi"), getMirrorOrigin(req))
+            .replace(new RegExp(`//${escapeRegex(TARGET_HOST)}`, "gi"), `//${getMirrorHost(req)}`);
+          res.set(key, newLocation);
+          continue;
+        }
+        if (lk === "set-cookie") {
+          const rewritten = value.replace(
+            new RegExp(`domain\\s*=\\s*\\.?${escapeRegex(TARGET_HOST)}`, "gi"),
+            `domain=${getMirrorHost(req)}`
+          );
+          res.append(key, rewritten);
+          continue;
+        }
+        res.set(key, value);
+      }
+
+      if (retryRes.status >= 300 && retryRes.status < 400) {
+        return res.status(retryRes.status).end();
+      }
+
+      res.set("X-Robots-Tag", "index, follow");
+      const retryContentType = getHeader(retryResHeaders, "content-type") || "";
+      const retryCategory = getContentCategory(retryContentType);
+      if (retryCategory === "other") {
+        res.status(retryRes.status);
+        return res.send(retryRes.body);
+      }
+      const retryEncoding = getHeader(retryResHeaders, "content-encoding");
+      let retryBody;
+      try { retryBody = await decompressBody(retryRes.body, retryEncoding); } catch { retryBody = retryRes.body; }
+      let retryText = retryBody.toString("utf-8");
+      switch (retryCategory) {
+        case "html": retryText = rewriteHTML(retryText, req); break;
+        case "css": retryText = rewriteCSS(retryText, req); break;
+        case "js": retryText = rewriteJS(retryText, req); break;
+        case "json": retryText = rewriteJSON(retryText, req); break;
+        case "xml": retryText = rewriteSitemap(retryText, req); break;
+        case "text":
+          retryText = retryText.replace(new RegExp(`https?://${escapeRegex(TARGET_HOST)}`, "gi"), getMirrorOrigin(req));
+          break;
+      }
+      res.status(retryRes.status);
+      return res.send(retryText);
+    } catch (retryErr) {
+      console.error(`[retry] Also failed: ${retryErr.message}`);
+    }
+
+    res.status(502).send(`<!DOCTYPE html><html><head><title>Bad Gateway</title><meta http-equiv="refresh" content="5"></head><body style="font-family:sans-serif;text-align:center;padding:60px"><h1>502 Bad Gateway</h1><p>Mirror proxy could not reach upstream server. Auto-retrying in 5 seconds...</p><p style="color:#888;font-size:12px">${new Date().toISOString()}</p></body></html>`);
   }
 });
 
