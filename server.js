@@ -45,6 +45,220 @@ const CUSTOM_LOGO = process.env.CUSTOM_LOGO || "https://pub-b809a12aff9f4b918a30
 // Original logo filename pattern to replace
 const ORIGINAL_LOGO_PATTERN = process.env.ORIGINAL_LOGO_PATTERN || "9453036c-bed9-4ac2-987c-d354b4bcaafa";
 
+// ============================================================
+// AD / MALWARE DOMAIN BLOCKLIST — stripped from upstream HTML
+// ============================================================
+const AD_DOMAINS = [
+  "effectivegatecpm.com",
+  "profitablegatecpm.com",
+  "highperformancegatecpm.com",
+  "effectiveperformancenetwork.com",
+  "storageimagedisplay.com",
+  "onclickalgo.com",
+  "onclickperformance.com",
+  "onclickmax.com",
+  "clickadu.com",
+  "clickadilla.com",
+  "pushame.com",
+  "pushnami.com",
+  "pushprofit.com",
+  "push-notifications.click",
+  "trafficjunky.com",
+  "exoclick.com",
+  "exosrv.com",
+  "juicyads.com",
+  "hilltopads.net",
+  "hilltopads.com",
+  "a-ads.com",
+  "ad-maven.com",
+  "admaven.com",
+  "adsterra.com",
+  "adsterratools.com",
+  "propellerads.com",
+  "propellerclick.com",
+  "popcash.net",
+  "popads.net",
+  "popunder.net",
+  "richpush.com",
+  "pushground.com",
+  "evadav.com",
+  "galaksion.com",
+  "monetag.com",
+  "surfrival.com",
+  "bongacams.com",
+  "chaturbate.com",
+  "livejasmin.com",
+  "cam4.com",
+  "stripchat.com",
+  "1xbet.com",
+  "mostbet.com",
+  "melbet.com",
+  "linebet.com",
+  "betway.com",
+  "bet365.com",
+  "betfury.com",
+  "stake.com",
+  "rollercoin.com",
+  "notifpush.com",
+  "pushwhy.com",
+  "winr.mobi",
+  "cpx.to",
+  "acint.net",
+  "tsyndicate.com",
+  "realsrv.com",
+  "disqusads.com",
+  "adnxs.com",
+  "doubleclick.net",
+  "googlesyndication.com",
+  "adsco.re",
+  "adzilla.com",
+  "adzilla.io",
+];
+
+// Build regex for matching ad domains in src/href attributes
+const AD_DOMAIN_PATTERN = AD_DOMAINS.map(d => escapeRegex(d)).join("|");
+const AD_DOMAIN_REGEX = new RegExp(AD_DOMAIN_PATTERN, "i");
+
+/**
+ * Strip all ad-related content from HTML response.
+ * This runs BEFORE other rewriting to remove ads at the source.
+ */
+function stripAds(html) {
+  let out = html;
+
+  // 1. Remove <script> tags loading from ad domains
+  //    Matches: <script ...src="...effectivegatecpm.com..."...>...</script>
+  //    and self-closing: <script ...src="...effectivegatecpm.com...".../>
+  out = out.replace(
+    new RegExp(`<script[^>]*\\bsrc\\s*=\\s*["'][^"']*(?:${AD_DOMAIN_PATTERN})[^"']*["'][^>]*>[\\s\\S]*?<\\/script>`, "gi"),
+    "<!-- ad removed -->"
+  );
+  out = out.replace(
+    new RegExp(`<script[^>]*\\bsrc\\s*=\\s*["'][^"']*(?:${AD_DOMAIN_PATTERN})[^"']*["'][^>]*\\/?>`, "gi"),
+    "<!-- ad removed -->"
+  );
+
+  // 2. Remove <script> tags with data-cfasync that load invoke.js (common ad pattern)
+  out = out.replace(
+    /<script[^>]*data-cfasync\s*=\s*["']false["'][^>]*src\s*=\s*["'][^"']*invoke\.js["'][^>]*>[\s\S]*?<\/script>/gi,
+    "<!-- ad removed -->"
+  );
+  out = out.replace(
+    /<script[^>]*src\s*=\s*["'][^"']*invoke\.js["'][^>]*data-cfasync\s*=\s*["']false["'][^>]*>[\s\S]*?<\/script>/gi,
+    "<!-- ad removed -->"
+  );
+
+  // 3. Remove entire <div class="kln">...</div> ad wrapper blocks
+  //    These contain ad containers; use greedy but bounded matching
+  out = out.replace(
+    /<div\s+class\s*=\s*["']kln["'][^>]*>[\s\S]*?<\/div>\s*(?:<\/div>\s*)*(?=<(?:div|section|main|article|footer|header|nav|aside|script|link|!--|\/body|\/html)|\s*$)/gi,
+    "<!-- ad block removed -->"
+  );
+
+  // 4. Remove ad container divs with long hex hash IDs/classes
+  //    Pattern: id="container-[32hex]" or class="container-[32hex]..."
+  out = out.replace(
+    /<div\s+[^>]*(?:id|class)\s*=\s*["']container-[a-f0-9]{20,}[^"']*["'][^>]*>[\s\S]*?<\/div>/gi,
+    "<!-- ad container removed -->"
+  );
+
+  // 5. Remove <iframe> tags from ad domains
+  out = out.replace(
+    new RegExp(`<iframe[^>]*\\bsrc\\s*=\\s*["'][^"']*(?:${AD_DOMAIN_PATTERN})[^"']*["'][^>]*>[\\s\\S]*?<\\/iframe>`, "gi"),
+    "<!-- ad iframe removed -->"
+  );
+  out = out.replace(
+    new RegExp(`<iframe[^>]*\\bsrc\\s*=\\s*["'][^"']*(?:${AD_DOMAIN_PATTERN})[^"']*["'][^>]*\\/?>`, "gi"),
+    "<!-- ad iframe removed -->"
+  );
+
+  // 6. Remove <a> tags pointing to ad domains (ad click links)
+  out = out.replace(
+    new RegExp(`<a[^>]*\\bhref\\s*=\\s*["'][^"']*(?:${AD_DOMAIN_PATTERN})[^"']*["'][^>]*>[\\s\\S]*?<\\/a>`, "gi"),
+    ""
+  );
+
+  // 7. Remove inline <script> blocks that reference ad domains
+  //    e.g., <script>...effectivegatecpm.com...</script>
+  out = out.replace(
+    new RegExp(`<script(?:\\s[^>]*)?>([\\s\\S]*?)<\\/script>`, "gi"),
+    function(match, scriptContent) {
+      if (AD_DOMAIN_REGEX.test(scriptContent)) {
+        return "<!-- ad script removed -->";
+      }
+      // Also catch common ad loader patterns
+      if (/\binvoke\.js\b/.test(scriptContent) && /container-[a-f0-9]{20,}/.test(scriptContent)) {
+        return "<!-- ad loader removed -->";
+      }
+      return match;
+    }
+  );
+
+  // 8. Remove <link> (preload/prefetch) for ad domains
+  out = out.replace(
+    new RegExp(`<link[^>]*\\bhref\\s*=\\s*["'][^"']*(?:${AD_DOMAIN_PATTERN})[^"']*["'][^>]*\\/?>`, "gi"),
+    "<!-- ad link removed -->"
+  );
+
+  // 9. Remove <img> loading from ad image CDNs
+  out = out.replace(
+    new RegExp(`<img[^>]*\\bsrc\\s*=\\s*["'][^"']*(?:storageimagedisplay\\.com)[^"']*["'][^>]*\\/?>`, "gi"),
+    "<!-- ad image removed -->"
+  );
+
+  // 10. Remove background-image styles referencing ad CDNs
+  out = out.replace(
+    new RegExp(`background-image\\s*:\\s*url\\([^)]*(?:storageimagedisplay\\.com)[^)]*\\)`, "gi"),
+    "background-image: none"
+  );
+
+  // 11. Clean up leftover nested empty ad divs and orphaned ad wrappers
+  //     After removing inner content, we may have empty <div class="kln"></div>
+  for (let i = 0; i < 5; i++) {
+    out = out.replace(/<div[^>]*>\s*(?:<!--[^>]*-->)*\s*<\/div>/g, "");
+  }
+
+  return out;
+}
+
+/**
+ * Strip ad references from JavaScript files.
+ */
+function stripAdsFromJS(js) {
+  let out = js;
+  // Remove any string literals containing ad domains
+  for (const domain of AD_DOMAINS) {
+    // Replace URL strings pointing to ad domains with empty string
+    out = out.replace(
+      new RegExp(`(["'\`])https?:\\/\\/[^"'\`]*${escapeRegex(domain)}[^"'\`]*\\1`, "gi"),
+      "''"
+    );
+    out = out.replace(
+      new RegExp(`(["'\`])\\/\\/[^"'\`]*${escapeRegex(domain)}[^"'\`]*\\1`, "gi"),
+      "''"
+    );
+  }
+  return out;
+}
+
+/**
+ * Strip ad references from CSS files.
+ */
+function stripAdsFromCSS(css) {
+  let out = css;
+  // Remove @import rules loading from ad domains
+  out = out.replace(
+    new RegExp(`@import\\s+(?:url\\()?[^;]*(?:${AD_DOMAIN_PATTERN})[^;]*;`, "gi"),
+    "/* ad import removed */"
+  );
+  // Remove background-image referencing ad CDNs
+  out = out.replace(
+    new RegExp(`background(?:-image)?\\s*:[^;]*(?:storageimagedisplay\\.com)[^;]*;`, "gi"),
+    "background-image: none;"
+  );
+  return out;
+}
+
 app.use(compression());
 app.set("trust proxy", true);
 
@@ -135,31 +349,57 @@ function getAntiInjectionCode(mirrorHost) {
 
   return '<meta http-equiv="Content-Security-Policy" content="' + metaCSP + '">'
     + '<script>(function(){"use strict";'
+    // Blocked ad domains list
+    + 'var B=["effectivegatecpm.com","profitablegatecpm.com","highperformancegatecpm.com","effectiveperformancenetwork.com","storageimagedisplay.com","onclickalgo.com","onclickperformance.com","onclickmax.com","clickadu.com","clickadilla.com","pushame.com","pushnami.com","pushprofit.com","trafficjunky.com","exoclick.com","exosrv.com","juicyads.com","hilltopads.net","hilltopads.com","a-ads.com","ad-maven.com","admaven.com","adsterra.com","adsterratools.com","propellerads.com","propellerclick.com","popcash.net","popads.net","popunder.net","richpush.com","pushground.com","evadav.com","galaksion.com","monetag.com","surfrival.com","notifpush.com","pushwhy.com","winr.mobi","cpx.to","acint.net","tsyndicate.com","realsrv.com","adsco.re","googlesyndication.com","adzilla.com","adzilla.io"];'
     // Allowed hostnames — everything else is treated as injected
     + 'var A=["' + mirrorHost + '","' + TARGET_HOST + '","fonts.googleapis.com","fonts.gstatic.com","cdnjs.cloudflare.com","www.google.com","www.gstatic.com","ajax.googleapis.com","www.google-analytics.com","www.googletagmanager.com"];'
-    + 'function ok(s){if(!s)return true;try{var u=new URL(s,location.href);'
+    // Check if URL is from a blocked ad domain
+    + 'function isAd(s){if(!s)return false;try{var h=(new URL(s,location.href)).hostname.toLowerCase();for(var i=0;i<B.length;i++){if(h===B[i]||h.endsWith("."+B[i]))return true;}}catch(e){}return false;}'
+    // Check if URL is allowed
+    + 'function ok(s){if(!s)return true;if(isAd(s))return false;try{var u=new URL(s,location.href);'
     + 'if(u.origin===location.origin)return true;'
     + 'for(var i=0;i<A.length;i++){if(u.hostname===A[i]||u.hostname.endsWith("."+A[i]))return true;}'
     + 'if(u.hostname.endsWith(".r2.dev")||u.hostname.endsWith(".cloudflare.com")||u.hostname.endsWith(".jsdelivr.net"))return true;'
     + '}catch(e){return true;}return false;}'
-    // MutationObserver — removes injected elements in real time
+    // Check if an element or its children contain ad content
+    + 'function isAdEl(n){if(!n||n.nodeType!==1)return false;'
+    + 'var c=n.className||"";if(typeof c==="string"&&(c==="kln"||/container-[a-f0-9]{20,}/.test(c)))return true;'
+    + 'var id=n.id||"";if(/container-[a-f0-9]{20,}/.test(id))return true;'
+    + 'if(n.tagName==="SCRIPT"){var s=n.src||"";if(isAd(s))return true;if(s&&/invoke\\.js/.test(s))return true;'
+    + 'var t=n.textContent||"";for(var i=0;i<B.length;i++){if(t.indexOf(B[i])!==-1)return true;}}return false;}'
+    // Remove an ad element and log it
+    + 'function kill(n){try{n.remove();}catch(e){}}'
+    // MutationObserver — removes ad elements in real time
     + 'var mo=new MutationObserver(function(ms){for(var i=0;i<ms.length;i++){'
     + 'var ns=ms[i].addedNodes;for(var j=0;j<ns.length;j++){var n=ns[j];'
-    + 'if(n.nodeType!==1)continue;var t=n.tagName;'
-    + 'if((t==="IFRAME"||t==="OBJECT"||t==="EMBED")&&!ok(n.src||n.data)){n.remove();continue;}'
-    + 'if(t==="SCRIPT"&&n.src&&!ok(n.src)){n.remove();continue;}'
-    + 'if(n.querySelectorAll){var sub=n.querySelectorAll("iframe,object,embed");'
-    + 'for(var k=0;k<sub.length;k++){if(!ok(sub[k].src||sub[k].data))sub[k].remove();}}}}});'
+    + 'if(n.nodeType!==1)continue;'
+    + 'if(isAdEl(n)){kill(n);continue;}'
+    + 'var t=n.tagName;'
+    + 'if((t==="IFRAME"||t==="OBJECT"||t==="EMBED")&&!ok(n.src||n.data)){kill(n);continue;}'
+    + 'if(t==="SCRIPT"&&n.src&&!ok(n.src)){kill(n);continue;}'
+    + 'if(t==="LINK"&&n.href&&isAd(n.href)){kill(n);continue;}'
+    + 'if(n.querySelectorAll){var ads=n.querySelectorAll("[class*=\\"container-\\"],iframe,object,embed,script[src],div.kln");'
+    + 'for(var k=0;k<ads.length;k++){if(isAdEl(ads[k])||!ok(ads[k].src||ads[k].data||""))kill(ads[k]);}}'
+    + '}}});'
     + 'if(document.documentElement)mo.observe(document.documentElement,{childList:true,subtree:true});'
     + 'else document.addEventListener("DOMContentLoaded",function(){mo.observe(document.documentElement,{childList:true,subtree:true});});'
-    // Block unauthorized popups
-    + 'var wo=window.open;window.open=function(u){if(u&&!ok(u))return null;return wo.apply(window,arguments);};'
-    // Clean existing injected elements on DOMContentLoaded
-    + 'document.addEventListener("DOMContentLoaded",function(){'
-    + 'var els=document.querySelectorAll("iframe,object,embed");'
-    + 'for(var i=0;i<els.length;i++){if(!ok(els[i].src||els[i].data))els[i].remove();}'
-    + 'var sc=document.querySelectorAll("script[src]");'
-    + 'for(var i=0;i<sc.length;i++){if(!ok(sc[i].src))sc[i].remove();}});'
+    // Block unauthorized popups and window.open
+    + 'var wo=window.open;window.open=function(u){if(u&&(isAd(u)||!ok(u)))return null;return wo.apply(window,arguments);};'
+    // Intercept createElement to block ad script creation
+    + 'var ce=document.createElement.bind(document);document.createElement=function(tag){'
+    + 'var el=ce(tag);if(tag.toLowerCase()==="script"){'
+    + 'var origSet=Object.getOwnPropertyDescriptor(HTMLScriptElement.prototype,"src")||Object.getOwnPropertyDescriptor(el.__proto__,"src");'
+    + 'if(origSet&&origSet.set){Object.defineProperty(el,"src",{get:function(){return this.getAttribute("src")||"";},set:function(v){if(isAd(v)){return;}origSet.set.call(this,v);},configurable:true});}}'
+    + 'return el;};'
+    // Clean existing ad elements on DOMContentLoaded
+    + 'function cleanAll(){'
+    + 'document.querySelectorAll("div.kln").forEach(function(e){kill(e);});'
+    + 'document.querySelectorAll("[class*=\\"container-\\"]").forEach(function(e){if(/container-[a-f0-9]{20,}/.test(e.className))kill(e);});'
+    + 'document.querySelectorAll("iframe,object,embed").forEach(function(e){if(!ok(e.src||e.data||""))kill(e);});'
+    + 'document.querySelectorAll("script[src]").forEach(function(e){if(isAd(e.src)||!ok(e.src))kill(e);});'
+    + '}'
+    + 'document.addEventListener("DOMContentLoaded",cleanAll);'
+    + 'setTimeout(cleanAll,500);setTimeout(cleanAll,1500);setTimeout(cleanAll,3000);'
     + '})();</script>';
 }
 
@@ -744,7 +984,8 @@ async function fetchFromOrigin(path, headers, method, body) {
 function rewriteHTML(html, req) {
   const mirrorHost = getMirrorHost(req);
   const mirrorOrigin = getMirrorOrigin(req);
-  let out = html;
+  // Strip all ad content from upstream HTML FIRST
+  let out = stripAds(html);
 
   // Rewrite WordPress Jetpack CDN URLs: https://i{0-3}.wp.com/hianime.city/path → mirror/path
   out = out.replace(
@@ -837,7 +1078,7 @@ function rewriteHTML(html, req) {
 function rewriteCSS(css, req) {
   const mirrorHost = getMirrorHost(req);
   const mirrorOrigin = getMirrorOrigin(req);
-  let out = css;
+  let out = stripAdsFromCSS(css);
   // WP CDN
   out = out.replace(new RegExp(`https?://i[0-3]\\.wp\\.com/${escapeRegex(TARGET_HOST)}`, "gi"), mirrorOrigin);
   out = out.replace(new RegExp(`https?://${escapeRegex(TARGET_HOST)}`, "gi"), mirrorOrigin);
@@ -848,7 +1089,7 @@ function rewriteCSS(css, req) {
 function rewriteJS(js, req) {
   const mirrorHost = getMirrorHost(req);
   const mirrorOrigin = getMirrorOrigin(req);
-  let out = js;
+  let out = stripAdsFromJS(js);
   // WP CDN
   out = out.replace(new RegExp(`https?://i[0-3]\\.wp\\.com/${escapeRegex(TARGET_HOST)}`, "gi"), mirrorOrigin);
   out = out.replace(new RegExp(`https?://${escapeRegex(TARGET_HOST)}`, "gi"), mirrorOrigin);
