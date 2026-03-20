@@ -349,12 +349,13 @@ function setSecurityHeaders(res, req) {
   // Blocks scripts/iframes/objects from unauthorized domains.
   const csp = [
     "default-src 'self' https://" + mirrorHost,
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://" + mirrorHost
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://" + mirrorHost
       + " https://" + TARGET_HOST
       + " https://*.google.com https://*.googleapis.com https://*.gstatic.com"
       + " https://*.google-analytics.com https://*.googletagmanager.com"
       + " https://cdnjs.cloudflare.com https://*.cloudflare.com"
       + " https://*.jsdelivr.net https://*.r2.dev",
+    "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline' https://" + mirrorHost
       + " https://" + TARGET_HOST
       + " https://fonts.googleapis.com https://cdnjs.cloudflare.com"
@@ -363,7 +364,8 @@ function setSecurityHeaders(res, req) {
     "font-src 'self' data: https://fonts.gstatic.com https://" + TARGET_HOST
       + " https://" + mirrorHost + " https://cdnjs.cloudflare.com",
     "connect-src 'self' https://" + mirrorHost + " https://" + TARGET_HOST
-      + " wss://" + mirrorHost + " wss://" + TARGET_HOST + " https://*.r2.dev",
+      + " wss://" + mirrorHost + " wss://" + TARGET_HOST + " https://*.r2.dev"
+      + " https://*.google-analytics.com https://*.googleapis.com https://*.googletagmanager.com",
     "media-src 'self' https: blob: data:",
     "frame-src 'self' https://" + mirrorHost + " https:",
     "object-src 'none'",
@@ -391,12 +393,13 @@ function getAntiInjectionCode(mirrorHost) {
   // CSP meta tag — survives even if HTTP headers are stripped by ISP proxies
   const metaCSP = [
     "default-src 'self' https://" + mirrorHost,
-    "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://" + mirrorHost
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://" + mirrorHost
       + " https://" + TARGET_HOST
       + " https://*.google.com https://*.googleapis.com https://*.gstatic.com"
       + " https://*.google-analytics.com https://*.googletagmanager.com"
       + " https://cdnjs.cloudflare.com https://*.cloudflare.com"
       + " https://*.jsdelivr.net https://*.r2.dev",
+    "worker-src 'self' blob:",
     "style-src 'self' 'unsafe-inline' https://" + mirrorHost
       + " https://" + TARGET_HOST
       + " https://fonts.googleapis.com https://cdnjs.cloudflare.com"
@@ -405,7 +408,8 @@ function getAntiInjectionCode(mirrorHost) {
     "font-src 'self' data: https://fonts.gstatic.com https://" + TARGET_HOST
       + " https://" + mirrorHost + " https://cdnjs.cloudflare.com",
     "connect-src 'self' https://" + mirrorHost + " https://" + TARGET_HOST
-      + " wss://" + mirrorHost + " wss://" + TARGET_HOST + " https://*.r2.dev",
+      + " wss://" + mirrorHost + " wss://" + TARGET_HOST + " https://*.r2.dev"
+      + " https://*.google-analytics.com https://*.googleapis.com https://*.googletagmanager.com",
     "media-src 'self' https: blob: data:",
     "frame-src 'self' https://" + mirrorHost + " https:",
     "object-src 'none'",
