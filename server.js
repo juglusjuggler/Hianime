@@ -330,11 +330,31 @@ app.use(compression());
 app.set("trust proxy", true);
 
 // ============================================================
-// HTTPS REDIRECT — prevent ISP HTTP interception
+// GLOBAL HSTS HEADER — Tell browsers to ALWAYS use HTTPS
+// Must be set on ALL responses, not just proxied ones
 // ============================================================
 app.use((req, res, next) => {
-  if (req.headers["x-forwarded-proto"] === "http") {
-    return res.redirect(301, `https://${req.headers.host}${req.url}`);
+  res.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload");
+  next();
+});
+
+// ============================================================
+// HTTPS REDIRECT — prevent ISP HTTP interception
+// Handles multiple proxy header formats for compatibility
+// ============================================================
+app.use((req, res, next) => {
+  // Check multiple headers that proxies/platforms use
+  const proto = req.headers["x-forwarded-proto"]
+    || req.headers["x-forwarded-scheme"]
+    || req.headers["x-scheme"]
+    || (req.secure ? "https" : "http");
+  
+  // Normalize — some proxies send "https, http" or "https,http"
+  const scheme = proto.split(/[,\s]+/)[0].toLowerCase();
+  
+  if (scheme === "http") {
+    const host = req.headers.host || req.hostname;
+    return res.redirect(301, `https://${host}${req.url}`);
   }
   next();
 });
@@ -726,8 +746,8 @@ function getMirrorHost(req) {
 }
 
 function getMirrorOrigin(req) {
-  const proto = req.protocol || "https";
-  return `${proto}://${getMirrorHost(req)}`;
+  // Always use https — this mirror is served behind TLS-terminating proxy
+  return `https://${getMirrorHost(req)}`;
 }
 
 const STRIP_REQUEST_HEADERS = new Set([
